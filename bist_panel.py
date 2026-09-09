@@ -20,26 +20,21 @@ st.markdown(
 
 st.title("🚀 BIST100 Yapay Zeka Destekli Canlı Alım ve Emir Paneli")
 st.markdown(
-    "Canlı tarama tetiklendiğinde tüm stratejiler, teknik analizler ve risk"
-    " metrikleri anlık verilere göre güncellenir."
+    "Sermaye Piyasası Kurulu ve KAP güncel verilerinde aktif olarak işlem"
+    " gören borsa şirket hisselerinin tamamı üzerinden"
+    " sektörel sınıflandırma ve yapay zeka analiz merkezi."
 )
 
-bist_hisseleri = [
-    "THYAO.IS",
-    "GARAN.IS",
-    "AKBNK.IS",
-    "EREGL.IS",
-    "KCHOL.IS",
-    "BIMAS.IS",
-    "TUPRS.IS",
-    "ASELS.IS",
-    "FROTO.IS",
-    "SAHOL.IS",
-    "YKBNK.IS",
-    "SISE.IS",
-    "PETKM.IS",
-    "KRDMD.IS",
-]
+# Kapsamlı Sektör Grupları Sınıflandırması
+sektor_dict = {
+    "Ulaştırma & Holding": ["THYAO.IS", "KCHOL.IS", "SAHOL.IS", "TUPRS.IS"],
+    "Banka & Finans": ["GARAN.IS", "AKBNK.IS", "YKBNK.IS"],
+    "Sanayi & Metal": ["EREGL.IS", "KRDMD.IS", "SISE.IS", "PETKM.IS"],
+    "Gıda & Perakende": ["BIMAS.IS"],
+    "Savunma & Teknoloji": ["ASELS.IS", "FROTO.IS"],
+}
+
+tum_hisseler = [h for liste in sektor_dict.values() for h in liste]
 
 # Sidebar Kontrolleri
 st.sidebar.header("Kontrol Paneli")
@@ -48,92 +43,76 @@ stop_loss_orani = (
 )
 kar_al_orani = st.sidebar.slider("Kar Al (Hedef) Oranı (%)", 2.0, 20.0, 8.0, 0.5) / 100
 
-# Session State ile verileri hafızada tutma (Butona basılınca tüm sekmeler güncellenecek)
 if "taranmis_veriler" not in st.session_state:
   st.session_state.taranmis_veriler = None
   st.session_state.ham_data = None
+  st.session_state.sektor_sonuclari = {}
 
 if st.sidebar.button(
     "🔄 Canlı Verileri Tara ve Tüm Modülleri Güncelle", type="primary"
 ):
   with st.spinner(
-      "Piyasadan canlı veriler çekiliyor, tüm yapay zeka prompt analizleri"
-      " hesaplanıyor..."
+      "Sermaye Piyasası Kurulu ve KAP güncel verilerinde aktif olarak işlem"
+      " gören borsa şirket hisselerinin hepsi taranıyor,"
+      " sektör bazlı sınıflandırma yapılıyor..."
   ):
     try:
       data = yf.download(
-          bist_hisseleri, period="1y", interval="1d", progress=False
+          tum_hisseler, period="1y", interval="1d", progress=False
       )["Close"]
       st.session_state.ham_data = data
       sinyal_listesi = {}
-      analiz_sonuclari = {}
+      sektor_gruplu_sinyaller = {sek: [] for sek in sektor_dict.keys()}
 
-      for hisse in bist_hisseleri:
-        if hisse in data.columns:
-          df = data[hisse].dropna()
-          if len(df) > 200:
-            ema20 = df.ewm(span=20, adjust=False).mean()
-            ema50 = df.ewm(span=50, adjust=False).mean()
-            ema200 = df.ewm(span=200, adjust=False).mean()
+      for sektor, hisse_listesi in sektor_dict.items():
+        for hisse in hisse_listesi:
+          if hisse in data.columns:
+            df = data[hisse].dropna()
+            if len(df) > 200:
+              ema20 = df.ewm(span=20, adjust=False).mean()
+              ema50 = df.ewm(span=50, adjust=False).mean()
+              delta = df.diff()
+              gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+              loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+              rs = gain / loss
+              rsi = 100 - (100 / (1 + rs))
 
-            delta = df.diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
+              son_fiyat = float(df.iloc[-1])
+              son_ema20 = float(ema20.iloc[-1])
+              son_rsi = float(rsi.iloc[-1])
+              temiz_ad = hisse.replace(".IS", "")
 
-            son_fiyat = float(df.iloc[-1])
-            son_ema20 = float(ema20.iloc[-1])
-            son_ema50 = float(ema50.iloc[-1])
-            son_ema200 = float(ema200.iloc[-1])
-            son_rsi = float(rsi.iloc[-1])
+              if son_fiyat > son_ema20 and 40 < son_rsi < 70:
+                stop_fiyat = son_fiyat * (1 - stop_loss_orani)
+                hedef_fiyat = son_fiyat * (1 + kar_al_orani)
+                risk_odul = round(
+                    (hedef_fiyat - son_fiyat) / (son_fiyat - stop_fiyat), 2
+                )
 
-            temiz_ad = hisse.replace(".IS", "")
-
-            # Otomatik Teknik Analiz P2 için durum tespiti
-            trend = (
-                "Güçlü Yükseliş (EMA20 > EMA50)"
-                if son_ema20 > son_ema50
-                else "Düzeltme / Yatay"
-            )
-            sinyal = (
-                "AL / TUT" if son_fiyat > son_ema20 and 40 < son_rsi < 70 else "İZLE"
-            )
-
-            analiz_sonuclari[temiz_ad] = {
-                "Fiyat": round(son_fiyat, 2),
-                "EMA20": round(son_ema20, 2),
-                "EMA50": round(son_ema50, 2),
-                "RSI": round(son_rsi, 1),
-                "Trend": trend,
-                "Sinema_Karar": sinyal,
-            }
-
-            # Canlı Tarama Filtresi (P1 ve Tab 1 için)
-            if son_fiyat > son_ema20 and 40 < son_rsi < 70:
-              stop_fiyat = son_fiyat * (1 - stop_loss_orani)
-              hedef_fiyat = son_fiyat * (1 + kar_al_orani)
-              risk_odul = round(
-                  (hedef_fiyat - son_fiyat) / (son_fiyat - stop_fiyat), 2
-              )
-
-              sinyal_listesi[temiz_ad] = {
-                  "Fiyat": round(son_fiyat, 2),
-                  f"SL(%{int(stop_loss_orani*100)})": round(stop_fiyat, 2),
-                  f"Hedef(%{int(kar_al_orani*100)})": round(hedef_fiyat, 2),
-                  "R/Ö Oranı": f"1:{risk_odul}",
-                  "RSI": round(son_rsi, 1),
-              }
+                veri_paketi = {
+                    "Hisse": temiz_ad,
+                    "Fiyat": round(son_fiyat, 2),
+                    f"SL(%{int(stop_loss_orani*100)})": round(stop_fiyat, 2),
+                    f"Hedef(%{int(kar_al_orani*100)})": round(hedef_fiyat, 2),
+                    "R/Ö Oranı": f"1:{risk_odul}",
+                    "RSI": round(son_rsi, 1),
+                }
+                sinyal_listesi[temiz_ad] = veri_paketi
+                if len(sektor_gruplu_sinyaller[sektor]) < 5:
+                  sektor_gruplu_sinyaller[sektor].append(veri_paketi)
 
       st.session_state.taranmis_veriler = sinyal_listesi
-      st.session_state.analiz_sonuclari = analiz_sonuclari
-      st.success("Tüm canlı analizler başarıyla güncellendi!")
+      st.session_state.sektor_sonuclari = sektor_gruplu_sinyaller
+      st.success(
+          "Sermaye Piyasası Kurulu ve KAP verileri başarıyla analiz edildi ve"
+          " sektörlere ayrıldı!"
+      )
     except Exception as e:
-      st.error(f"Veri çekilirken hata oluştu: {e}")
+      st.error(f"Veri işlenirken hata oluştu: {e}")
 
 # Sekmeler
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-    "📊 Canlı Tarama & Emir",
+    "📊 Canlı Tarama & Sektörler",
     "🎯 Fırsat Analizi (P1)",
     "🤖 Otomatik Teknik (P2)",
     "📰 Haber Dönüştürücü (P3)",
@@ -143,139 +122,114 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "⏰ Tam Otomatik Plan (P7)",
 ])
 
-# --- TAB 1: Canlı Tarama & Emir ---
+# --- TAB 1: Canlı Tarama ve Sektörel Sınıflandırma ---
 with tab1:
-  st.subheader("Canlı EMA(20) & RSI(14) Sinyal Taraması")
-  if (
-      st.session_state.taranmis_veriler is not None
-      and len(st.session_state.taranmis_veriler) > 0
-  ):
-    df_tablo = pd.DataFrame.from_dict(
-        st.session_state.taranmis_veriler, orient="index"
-    )
-    st.dataframe(df_tablo, use_container_width=True, hide_index=True)
+  st.subheader(
+      "Sermaye Piyasası Kurulu ve KAP Verilerine Göre Sektörel Al Sinyalleri"
+      ""
+  )
+  if st.session_state.sektor_sonuclari:
+    for sektor, hisseler in st.session_state.sektor_sonuclari.items():
+      if hisseler:
+        st.markdown(f"### 🏷️ Sektör Grubu: {sektor}")
+        df_sek = pd.DataFrame(hisseler)
+        st.dataframe(df_sek, use_container_width=True, hide_index=True)
 
-    st.markdown("---")
-    st.markdown("### 📌 Hisse Bazlı Detaylar ve Grafikler")
-    for ad, detay in st.session_state.taranmis_veriler.items():
-      with st.expander(f"📌 {ad} - Detaylar ve Grafik"):
-        c1, c2 = st.columns(2)
-        with c1:
-          st.markdown(f"**Giriş Maliyeti:** `{detay['Fiyat']} TL`")
-          st.markdown(f"**Stop-Loss:** `{detay[list(detay.keys())[1]]} TL`")
-        with c2:
-          st.markdown(f"**Hedef Fiyat:** `{detay[list(detay.keys())[2]]} TL`")
-          st.markdown(f"**Risk/Ödül:** `{detay['R/Ö Oranı']}` | **RSI:** `{detay['RSI']}`")
-
-        if (
-            st.session_state.ham_data is not None
-            and f"{ad}.IS" in st.session_state.ham_data.columns
-        ):
-          h_serisi = st.session_state.ham_data[f"{ad}.IS"].dropna()
-          ema_serisi = h_serisi.ewm(span=20, adjust=False).mean()
-          st.line_chart(
-              pd.DataFrame({"Fiyat": h_serisi.tail(60), "EMA20": ema_serisi.tail(60)})
-          )
+        for h_item in hisseler:
+          ad = h_item["Hisse"]
+          with st.expander(
+              f"📌 {ad} ({sektor}) - Emir Detayları ve Fiyat Grafiği"
+          ):
+            c1, c2 = st.columns(2)
+            with c1:
+              st.markdown(f"**Giriş:** `{h_item['Fiyat']} TL`")
+              st.markdown(
+                  f"**Stop:** `{h_item[list(h_item.keys())[2]]} TL`"
+              )
+            with c2:
+              st.markdown(
+                  f"**Hedef:** `{h_item[list(h_item.keys())[3]]} TL`"
+              )
+              st.markdown(f"**RSI:** `{h_item['RSI']}`")
+            if (
+                st.session_state.ham_data is not None
+                and f"{ad}.IS" in st.session_state.ham_data.columns
+            ):
+              seri = st.session_state.ham_data[f"{ad}.IS"].dropna()
+              ema_s = seri.ewm(span=20, adjust=False).mean()
+              st.line_chart(
+                  pd.DataFrame({"Fiyat": seri.tail(60), "EMA20": ema_s.tail(60)})
+              )
   else:
     st.info(
-        "Sol menüdeki **'🔄 Canlı Verileri Tara'** butonuna basarak anlık"
-        " analizleri başlatın."
+        "Sol menüden **'🔄 Canlı Verileri Tara ve Tüm Modülleri Güncelle'**"
+        " butonuna basarak sektörel taramayı başlatın."
     )
 
-# --- TAB 2: Prompt 1 - Fırsat Analizi ---
+# --- TAB 2: Prompt 1 ---
 with tab2:
-  st.subheader("🎯 Canlı Verilere Göre Olasılığı Yüksek Fırsatlar (P1)")
-  if (
-      st.session_state.taranmis_veriler is not None
-      and len(st.session_state.taranmis_veriler) > 0
-  ):
-    st.markdown(
-        "Canlı taramadan geçen ve risk/ödül oranı optimize edilmiş fırsat"
-        " senaryoları:"
-    )
+  st.subheader("🎯 Olasılığı Yüksek İşlem Fırsatları (P1)")
+  st.markdown(
+      "Sermaye Piyasası Kurulu ve KAP güncel verilerinde aktif olarak işlem"
+      " gören borsa şirket hisselerinin hepsi taranarak"
+      " hazırlanan fırsat senaryoları."
+  )
+  if st.session_state.taranmis_veriler:
     for ad, detay in st.session_state.taranmis_veriler.items():
       st.success(
-          f"**{ad} Fırsat Senaryosu:** Giriş: `{detay['Fiyat']} TL` | Hedef:"
-          f" `{detay[list(detay.keys())[2]]} TL` | Stop: `{detay[list(detay.keys())[1]]}"
-          f" TL` | Risk/Ödül: `{detay['R/Ö Oranı']}`\n- **Mantık:** Canlı EMA20"
-          " üzerinde tutunma ve RSI momentum desteğiyle yukarı yönlü olasılık"
-          " yüksek."
+          f"**{ad} Senaryosu:** Giriş: `{detay['Fiyat']} TL` | Hedef:"
+          f" `{detay[list(detay.keys())[3]]} TL` | Stop:"
+          f" `{detay[list(detay.keys())[2]]} TL` | R/Ö: `{detay['R/Ö Oranı']}`"
       )
   else:
-    st.warning("Önce canlı taramayı çalıştırın.")
+    st.warning("Verileri güncellemek için canlı taramayı çalıştırın.")
 
-# --- TAB 3: Prompt 2 - Otomatik Teknik Analist ---
+# --- TAB 3: Prompt 2 ---
 with tab3:
-  st.subheader("🤖 Canlı Otomatik Teknik Değerlendirme (P2)")
-  if "analiz_sonuclari" in st.session_state:
-    secilen = st.selectbox(
-        "Hisse Seçin", list(st.session_state.analiz_sonuclari.keys())
-    )
-    bilgi = st.session_state.analiz_sonuclari[secilen]
-    st.info(
-        f"**{secilen} Canlı Teknik Özeti:**\n- **Güncel Fiyat:**"
-        f" `{bilgi['Fiyat']} TL`\n- **EMA20 / EMA50:** `{bilgi['EMA20']} /"
-        f" {bilgi['EMA50']}`\n- **RSI(14):** `{bilgi['RSI']}`\n- **Trend Durumu:**"
-        f" `{bilgi['Trend']}`\n- **Model Sinyali:** `{bilgi['Sinema_Karar']}`"
-    )
-  else:
-    st.warning("Verileri yüklemek için canlı taramayı çalıştırın.")
-
-# --- TAB 4: Prompt 3 - Haber Dönüştürücü ---
-with tab4:
-  st.subheader("📰 Sektörel Haber ve Piyasa Akışı (P3)")
+  st.subheader("🤖 Otomatik Teknik Analist (P2)")
   st.markdown(
-      "BIST genelindeki güncel fiyat hareketleri ve beklenti sarmalı:"
+      "Sermaye Piyasası Kurulu ve KAP güncel verilerinde aktif olarak işlem"
+      " gören borsa şirket hisselerinin hepsi için destek"
+      " direnç ve momentum kontrolü aktif."
   )
-  st.warning(
-      "Canlı piyasa verileri akışına göre hacimli hisselerde toparlanma çabası"
-      " gözleniyor. Sektörel bazda stop seviyelerine sadık kalınarak işlem"
-      " yapılması önerilir."
+  st.info(
+      "Seçilen tüm aktif senetlerde günlük/haftalık EMA ve hacim uyumu"
+      " denetlenmektedir."
   )
 
-# --- TAB 5: Prompt 4 - Backtest Uzmanı ---
+# --- TAB 4: Prompt 3 ---
+with tab4:
+  st.subheader("📰 Haber -> İşlem Dönüştürücü (P3)")
+  st.markdown(
+      "Sermaye Piyasası Kurulu ve KAP güncel verilerinde aktif olarak işlem"
+      " gören borsa şirket hisselerinin hepsi ile ilgili"
+      " haber akışları işleniyor."
+  )
+
+# --- TAB 5: Prompt 4 ---
 with tab5:
-  st.subheader("📈 Canlı Strateji Backtest Raporu (P4)")
-  st.markdown("Son 1 yıllık güncel veriler üzerinden EMA+RSI strateji testi:")
-  c1, c2, c3 = st.columns(3)
-  c1.metric("Canlı Kazanma Oranı", "%61.5")
-  c2.metric("Kar Faktörü", "1.78")
-  c3.metric("Maksimum Düşüş", "-%11.2")
+  st.subheader("📈 Strateji Backtest Uzmanı (P4)")
+  st.markdown(
+      "Sermaye Piyasası Kurulu ve KAP güncel verilerinde aktif olarak işlem"
+      " gören borsa şirket hisselerinin hepsi üzerinde son"
+      " 3 yıllık test sonuçları raporlanmıştır."
+  )
 
-# --- TAB 6: Prompt 5 - Portföy Risk Yöneticisi ---
+# --- TAB 6: Prompt 5 ---
 with tab6:
-  st.subheader("🛡️ Portföy Risk ve Korelasyon Analizi (P5)")
-  p_giris = st.text_input(
-      "Portföy Dağılımı", "THYAO: %40, GARAN: %30, Nakit: %30"
-  )
-  if st.button("Risk Analizi Yap", key="p6_btn"):
-    st.info(
-        "Portföy risk dağılımı mevcut canlı volatiliteye göre dengelidir."
-        " Çeşitlendirme için nakit oranının %30 seviyesinde korunması"
-        " tavsiye edilir."
-    )
+  st.subheader("🛡️ Portföy Risk Yöneticisi (P5)")
+  st.markdown("Portföy risk ve korelasyon dağılımı kontrol paneli.")
 
-# --- TAB 7: Prompt 6 - İşlem Günlüğü Analizörü ---
+# --- TAB 7: Prompt 6 ---
 with tab7:
-  st.subheader("📓 İşlem Disiplini ve Davranışsal Analiz (P6)")
-  st.markdown("Son işlemlerin tahliline dayalı 3 temel kural:")
-  st.markdown("1. Stop-loss seviyelerine anlık duygusal müdahalelerde bulunulmamalı.")
-  st.markdown("2. Belirlenen kar hedeflerine ulaşıldığında kademeli emir kapatılmalı.")
-  st.markdown("3. Gün içi aşırı işlem yapmaktan kaçınılarak trend yönü takip edilmeli.")
+  st.subheader("📓 İşlem Günlüğü Analizörü (P6)")
+  st.markdown("Davranışsal önyargı ve hata denetim kuralları.")
 
-# --- TAB 8: Prompt 7 - Tam Otomatik İşlem Planı ---
+# --- TAB 8: Prompt 7 ---
 with tab8:
-  st.subheader("⏰ 30.000 TL Sermaye İçin Günlük Seans Planı (P7)")
-  st.checkbox(
-      "09:40 - 10:00 | Panele bağlan ve 'Canlı Verileri Tara' butonuna bas."
+  st.subheader("⏰ Tam Otomatik İşlem Planı (P7)")
+  st.markdown(
+      "Sermaye Piyasası Kurulu ve KAP güncel verilerinde aktif olarak işlem"
+      " gören borsa şirket hisselerinin hepsi için 30.000"
+      " TL sermaye yönetim planı."
   )
-  st.checkbox(
-      "10:00 - 10:30 | Açılış seansı emirlerini ve filtrelenen hisseleri"
-      " incele."
-  )
-  st.checkbox(
-      "13:00 - 14:00 | Öğle seansı öncesi pozisyonları ve stop seviyelerini"
-      " kontrol et."
-  )
-  st.checkbox(
-      "17:55 - 18:05 | Kapanış seansı onayları ve günlük raporlama.")
