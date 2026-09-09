@@ -7,9 +7,21 @@ st.set_page_config(
     page_title="BIST100 Canlı Alım ve Emir Paneli", page_icon="📈", layout="wide"
 )
 
+# Mobil ekranlarda tablo taşmasını önlemek için özel CSS
+st.markdown(
+    """
+    <style>
+    .dataframe {font-size: 12px !important;}
+    [data-testid="stHorizontalBlock"] {gap: 0rem;}
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
 st.title("🚀 BIST100 Canlı Alım ve Emir Paneli")
 st.markdown(
-    "Bu panel, seçilen BIST100 hisselerinin güncel verilerini çekerek EMA(20), EMA(50), EMA(200) ve RSI(14) stratejisine göre sinyal üretir."
+    "Bu panel, seçilen BIST100 hisselerinin güncel verilerini çekerek"
+    " EMA(20)/EMA(50)/EMA(200) ve RSI(14) stratejisine göre sinyal üretir."
 )
 
 # Taranacak Başlıca BIST Hisseleri
@@ -36,12 +48,8 @@ stop_loss_orani = (
 )
 
 if st.sidebar.button("🔄 Canlı Verileri Tara"):
-  with st.spinner(
-      "Piyasadan canlı veriler çekiliyor ve göstergeler hesaplanıyor..."
-  ):
+  with st.spinner("Piyasadan canlı veriler taranıyor..."):
     sinyal_listesi = []
-
-    # Verileri toplu çekme
     data = yf.download(
         bist_hisseleri, period="1y", interval="1d", progress=False
     )["Close"]
@@ -52,10 +60,6 @@ if st.sidebar.button("🔄 Canlı Verileri Tara"):
           df = data[hisse].dropna()
           if len(df) > 200:
             ema20 = df.ewm(span=20, adjust=False).mean()
-            ema50 = df.ewm(span=50, adjust=False).mean()
-            ema200 = df.ewm(span=200, adjust=False).mean()
-
-            # RSI Hesaplama
             delta = df.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -66,17 +70,15 @@ if st.sidebar.button("🔄 Canlı Verileri Tara"):
             son_ema20 = float(ema20.iloc[-1])
             son_rsi = float(rsi.iloc[-1])
 
-            # Basit Trend/Alım Koşulu (Örn: Fiyat EMA20 üzerinde ve RSI aşırı satımda değilse)
             if son_fiyat > son_ema20 and 40 < son_rsi < 70:
               stop_loss_fiyati = son_fiyat * (1 - stop_loss_orani)
               sinyal_listesi.append({
-                  "Hisse": hisse,
-                  "Kapanış / Canlı": round(son_fiyat, 2),
-                  "Alış": round(son_fiyat, 2),
-                  "Stop-Loss (%"
-                  + str(int(stop_loss_orani * 100))
-                  + ")": round(stop_loss_fiyati, 2),
-                  "RSI(14)": round(son_rsi, 2),
+                  "Hisse": hisse.replace(".IS", ""),
+                  "Fiyat": round(son_fiyat, 2),
+                  f"SL(%{int(stop_loss_orani*100)})": round(
+                      stop_loss_fiyati, 2
+                  ),
+                  "RSI": round(son_rsi, 1),
               })
       except Exception as e:
         continue
@@ -87,9 +89,7 @@ if st.sidebar.button("🔄 Canlı Verileri Tara"):
           f"Tarama tamamlandı! Kriterlere uyan toplam {len(sonuc_df)} hisse"
           " listeleniyor."
       )
-      st.dataframe(sonuc_df, use_container_width=True)
+      # Tabloyu ekrana tam oturtacak şekilde ayarlıyoruz
+      st.dataframe(sonuc_df, use_container_width=True, hide_index=True)
     else:
-      st.warning(
-          "Şu anki canlı koşullarda filtreye uyan hisse bulunamadı. Koşulları"
-          " esnetebilirsiniz."
-      )
+      st.warning("Şu anki koşullarda filtreye uyan hisse bulunamadı.")
